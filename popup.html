@@ -62,12 +62,15 @@
   </head>
   <body>
     <div class="wrap">
-      <h1>Attach active tab</h1>
-      <button id="attach-coding">Attach to Coding (18789)</button>
-      <button id="attach-research">Attach to Research (19001)</button>
+      <h1>Open controlled tab</h1>
+      <button id="open-coding">Open Coding tab (18789)</button>
+      <button id="open-research">Open Research tab (19001)</button>
+      <button id="attach-coding" class="secondary">Attach active tab → Coding (18789)</button>
+      <button id="attach-research" class="secondary">Attach active tab → Research (19001)</button>
       <button id="detach" class="secondary">Detach</button>
       <div id="status" class="status"></div>
+      <div class="status">Tip: use “Open controlled tab” to avoid Chrome crashes.</div>
     </div>
-    <script type="module" src="popup.js"></script>
+    <script src="popup.js"></script>
   </body>
 </html>

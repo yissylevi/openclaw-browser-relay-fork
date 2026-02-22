@@ -154,6 +154,15 @@
       .status[data-kind='error'] {
         color: color-mix(in oklab, #ef4444 75%, canvasText 25%);
       }
+      ol.hint {
+        padding-left: 18px;
+        margin: 6px 0 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      ol.hint li {
+        margin: 4px 0;
+      }
       textarea {
         width: min(680px, 100%);
         min-height: 96px;
@@ -189,22 +198,32 @@
         </div>
       </header>
 
-      <div class="card">
-        <h2>Extension build</h2>
-        <div class="status" id="build-status"></div>
-      </div>
+        <div class="card">
+          <h2>Extension build</h2>
+          <div class="status" id="build-status"></div>
+        </div>
 
-      <div class="grid">
+        <div class="grid">
         <div class="card">
           <h2>Quick setup</h2>
-          <p>Paste your gateway token once and we’ll connect both chat browsers automatically.</p>
+          <p>Follow these steps exactly once. After that, it just works.</p>
+          <ol class="hint">
+            <li>Click <strong>Load token</strong>. (This reads the token from your OpenClaw config files.)</li>
+            <li>Click <strong>Connect</strong>. You should see “Gateway: connected”.</li>
+            <li>Click <strong>Open both</strong> to open the Coding + Research chat windows.</li>
+            <li>When you want to control a page, click the extension icon and choose Coding or Research.</li>
+          </ol>
           <p class="hint">
             Where to find the token: open <code>~/.openclaw-coding/openclaw.json</code> or
             <code>~/.openclaw-research/openclaw.json</code> and copy <code>gateway.auth.token</code>.
           </p>
-          <label for="quick-token">Gateway token</label>
+          <label for="quick-token-coding">Coding gateway token (18789)</label>
           <div class="row">
-            <input id="quick-token" type="password" autocomplete="off" style="width: min(520px, 100%)" />
+            <input id="quick-token-coding" type="password" autocomplete="off" style="width: min(520px, 100%)" />
+          </div>
+          <label for="quick-token-research" style="margin-top: 10px">Research gateway token (19001)</label>
+          <div class="row">
+            <input id="quick-token-research" type="password" autocomplete="off" style="width: min(520px, 100%)" />
             <button id="quick-connect" type="button">Connect</button>
             <button id="quick-load-token" type="button" class="secondary">Load token</button>
           </div>
@@ -227,6 +246,9 @@
           <div class="hint" style="margin-top: 8px">
             Last attach error: <span id="last-attach-error">none</span>
           </div>
+          <div class="hint" style="margin-top: 8px">
+            Last attached tab: <span id="last-attached-tab">none</span>
+          </div>
         </div>
 
         <div class="card">
@@ -246,7 +268,10 @@
 
         <div class="card">
           <h2>Relay connection</h2>
-          <p class="hint">Sets the default relay for tabs without per-tab overrides.</p>
+          <p class="hint">
+            Plain English: this is the “main line” your browser connects to. If you don’t pick a special
+            connection for a tab, the extension uses these settings.
+          </p>
           <label for="port">Port</label>
           <div class="row">
             <input id="port" inputmode="numeric" pattern="[0-9]*" />
@@ -257,8 +282,11 @@
             <button id="save" type="button">Save</button>
           </div>
           <div class="hint">
-            Default port: <code>18792</code>. Extension connects to: <code id="relay-url">http://127.0.0.1:&lt;port&gt;/</code>.
-            Gateway token must match <code>gateway.auth.token</code> (or <code>OPENCLAW_GATEWAY_TOKEN</code>).
+            Plain English: the port is the “door number” to your OpenClaw gateway on this computer.
+            The token is your password. You can find it in
+            <code>~/.openclaw-coding/openclaw.json</code> or
+            <code>~/.openclaw-research/openclaw.json</code>
+            under <code>gateway.auth.token</code>.
           </div>
           <div class="status" id="status"></div>
         </div>
@@ -266,9 +294,11 @@
         <div class="card">
           <h2>Per-tab relay assignment</h2>
           <p>
-            Use this when running multiple relays/agents. Assign the current tab to a specific relay port/token.
+            Plain English: use this only if you want one tab to go to Coding and another tab to go to Research.
           </p>
-          <p class="hint">Tip: open a tab, click it, then assign it here to force Coding vs Research.</p>
+          <p class="hint">
+            Example: open Facebook → click its tab → set port to <code>19001</code> (Research) → Assign.
+          </p>
           <label for="tab-port">Port (current tab)</label>
           <div class="row">
             <input id="tab-port" inputmode="numeric" pattern="[0-9]*" />
@@ -280,44 +310,17 @@
             <input id="tab-token" type="password" autocomplete="off" style="width: min(520px, 100%)" />
           </div>
           <div class="hint">
-            Assignment is stored by tab id. Closing the tab clears the override.
+            Plain English: this “locks” the active tab to a specific connection.
+            If you close the tab, the lock disappears.
           </div>
           <div class="status" id="tab-status"></div>
         </div>
 
         <div class="card">
-          <h2>Chat browser auto-open</h2>
-          <p>
-            Open the OpenClaw chat browsers on Chrome startup. Each URL opens in its own window.
-          </p>
-          <div class="row">
-            <label class="toggle">
-              <input id="auto-open" type="checkbox" />
-              Auto-open chat browsers on startup
-            </label>
-          </div>
-          <label for="chat-base-ports" style="margin-top: 10px">Gateway base ports (one per line)</label>
-          <div class="row">
-            <textarea id="chat-base-ports" spellcheck="false"></textarea>
-          </div>
-          <label for="chat-urls" style="margin-top: 10px">Chat browser URLs (one per line)</label>
-          <div class="row">
-            <textarea id="chat-urls" spellcheck="false"></textarea>
-          </div>
-          <div class="row">
-            <button id="save-chat" type="button">Save chat settings</button>
-          </div>
-          <div class="hint">
-            Default base ports: <code>18789</code> and <code>19001</code>.
-            Effective URLs become <code>http://127.0.0.1:&lt;base&gt;/__openclaw__/canvas/</code>.
-            If you provide explicit URLs above, the base ports are ignored.
-          </div>
-          <div class="status" id="chat-status"></div>
-        </div>
-
-        <div class="card">
           <h2>Current tab assignments</h2>
-          <div class="hint">Lists only active tabs that have per-tab relay overrides.</div>
+          <div class="hint">
+            Plain English: this list shows any tabs you’ve manually locked to Coding or Research.
+          </div>
           <div id="tab-assignments" class="status"></div>
         </div>
 
@@ -339,14 +342,14 @@
           <div class="row">
             <button id="refresh-log" type="button">Refresh log</button>
             <button id="clear-log" type="button">Clear log</button>
+            <button id="test-log" type="button">Test log</button>
           </div>
           <div class="row" style="margin-top: 10px">
             <textarea id="debug-log" readonly spellcheck="false"></textarea>
           </div>
         </div>
       </div>
-
-      <script type="module" src="options.js"></script>
     </div>
+    <script src="options.js"></script>
   </body>
 </html>

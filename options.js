@@ -67,11 +67,17 @@ function setLastAttachError(text) {
   el.textContent = text || 'none'
 }
 
+function setLastAttachedTab(text) {
+  const el = document.getElementById('last-attached-tab')
+  if (!el) return
+  el.textContent = text || 'none'
+}
+
 async function loadDebugLog() {
   const stored = await chrome.storage.local.get(['debugLog'])
   const rows = Array.isArray(stored.debugLog) ? stored.debugLog : []
   const el = document.getElementById('debug-log')
-  if (el) el.value = rows.join('\n')
+  if (el) el.value = rows.length ? rows.join('\n') : '(no logs yet)'
 }
 
 function setChatStatus(kind, message) {
@@ -105,18 +111,18 @@ async function exportSettings() {
     'gatewayToken',
     'relayPortByTabId',
     'gatewayTokenByTabId',
-    'autoOpenChatBrowsers',
-    'chatBrowserUrls',
     'chatBrowserBasePorts',
   ])
+  const hasToken = Boolean(stored.gatewayToken)
+  if (hasToken && !confirm('The export file will contain your gateway token in plaintext. Do not share this file publicly. Continue?')) {
+    return
+  }
   const payload = {
     exportedAt: new Date().toISOString(),
     relayPort: stored.relayPort ?? null,
     gatewayToken: stored.gatewayToken ?? null,
     relayPortByTabId: stored.relayPortByTabId || {},
     gatewayTokenByTabId: stored.gatewayTokenByTabId || {},
-    autoOpenChatBrowsers: stored.autoOpenChatBrowsers ?? true,
-    chatBrowserUrls: stored.chatBrowserUrls || [],
     chatBrowserBasePorts: stored.chatBrowserBasePorts || [],
   }
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -126,21 +132,29 @@ async function exportSettings() {
   a.download = 'openclaw-relay-settings.json'
   a.click()
   URL.revokeObjectURL(url)
-  setBackupStatus('ok', 'Settings exported.')
+  setBackupStatus('ok', 'Settings exported. Keep this file private — it contains your token.')
 }
 
 async function importSettings(file) {
   try {
     const text = await file.text()
     const data = JSON.parse(text)
+    if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+      throw new Error('Invalid settings file: expected a JSON object')
+    }
+    const port = data.relayPort != null ? clampPort(data.relayPort) : DEFAULT_PORT
+    const token = typeof data.gatewayToken === 'string' ? data.gatewayToken : ''
+    const portByTab = (typeof data.relayPortByTabId === 'object' && data.relayPortByTabId && !Array.isArray(data.relayPortByTabId))
+      ? data.relayPortByTabId : {}
+    const tokenByTab = (typeof data.gatewayTokenByTabId === 'object' && data.gatewayTokenByTabId && !Array.isArray(data.gatewayTokenByTabId))
+      ? data.gatewayTokenByTabId : {}
+    const basePorts = Array.isArray(data.chatBrowserBasePorts) ? data.chatBrowserBasePorts.filter(p => typeof p === 'number') : []
     await chrome.storage.local.set({
-      relayPort: data.relayPort ?? DEFAULT_PORT,
-      gatewayToken: data.gatewayToken ?? '',
-      relayPortByTabId: data.relayPortByTabId || {},
-      gatewayTokenByTabId: data.gatewayTokenByTabId || {},
-      autoOpenChatBrowsers: data.autoOpenChatBrowsers ?? true,
-      chatBrowserUrls: data.chatBrowserUrls || [],
-      chatBrowserBasePorts: data.chatBrowserBasePorts || [],
+      relayPort: port,
+      gatewayToken: token,
+      relayPortByTabId: portByTab,
+      gatewayTokenByTabId: tokenByTab,
+      chatBrowserBasePorts: basePorts,
     })
     setBackupStatus('ok', 'Settings imported.')
     await load()
@@ -204,29 +218,24 @@ async function load() {
   const stored = await chrome.storage.local.get([
     'relayPort',
     'gatewayToken',
+    'gatewayTokenByPort',
     'forkFeatures',
-    'autoOpenChatBrowsers',
-    'chatBrowserUrls',
     'chatBrowserBasePorts',
     'lastAttachError',
+    'lastAttachedTab',
   ])
   const port = clampPort(stored.relayPort)
   const token = String(stored.gatewayToken || '').trim()
   document.getElementById('port').value = String(port)
   document.getElementById('token').value = token
-  document.getElementById('quick-token').value = token
+  const tokenByPort = stored.gatewayTokenByPort || {}
+  document.getElementById('quick-token-coding').value = tokenByPort[18789] || token || ''
+  document.getElementById('quick-token-research').value = tokenByPort[19001] || token || ''
   updateRelayUrl(port)
   await checkRelayReachable(port, token)
-  const autoOpen = stored.autoOpenChatBrowsers ?? true
-  document.getElementById('auto-open').checked = Boolean(autoOpen)
   const basePorts = Array.isArray(stored.chatBrowserBasePorts) && stored.chatBrowserBasePorts.length
     ? stored.chatBrowserBasePorts
     : DEFAULT_CHAT_BASE_PORTS
-  document.getElementById('chat-base-ports').value = basePorts.join('\n')
-  const urls = Array.isArray(stored.chatBrowserUrls) && stored.chatBrowserUrls.length
-    ? stored.chatBrowserUrls
-    : basePorts.map((port) => `http://127.0.0.1:${port}/__openclaw__/canvas/`)
-  document.getElementById('chat-urls').value = urls.join('\n')
 
   if (stored.forkFeatures?.version) {
     setBuildStatus('ok', `Fork features enabled: ${stored.forkFeatures.version}`)
@@ -238,6 +247,14 @@ async function load() {
     setLastAttachError(`${stored.lastAttachError.message} (${stored.lastAttachError.at || 'unknown time'})`)
   } else {
     setLastAttachError('none')
+  }
+
+  if (stored.lastAttachedTab?.tabId) {
+    setLastAttachedTab(
+      `tab ${stored.lastAttachedTab.tabId} · port ${stored.lastAttachedTab.port || '?'} · ${stored.lastAttachedTab.at || ''}`,
+    )
+  } else {
+    setLastAttachedTab('none')
   }
 
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
@@ -255,10 +272,11 @@ async function load() {
   await renderAssignments()
   await loadDebugLog()
 
-  const quickToken = String(document.getElementById('quick-token').value || '').trim()
-  if (quickToken) {
-    const coding = await checkRelayReachableSilent(18789, quickToken)
-    const research = await checkRelayReachableSilent(19001, quickToken)
+  const codingToken = String(document.getElementById('quick-token-coding').value || '').trim()
+  const researchToken = String(document.getElementById('quick-token-research').value || '').trim()
+  if (codingToken || researchToken) {
+    const coding = await checkRelayReachableSilent(18789, codingToken || token)
+    const research = await checkRelayReachableSilent(19001, researchToken || token)
     setQuickIndicator(
       'quick-gateway',
       coding.ok || research.ok ? 'Gateway: connected' : 'Gateway: offline',
@@ -288,16 +306,20 @@ async function save() {
 }
 
 async function quickConnect() {
-  const token = String(document.getElementById('quick-token').value || '').trim()
-  if (!token) return setQuickStatus('error', 'Enter a gateway token first.')
+  const codingToken = String(document.getElementById('quick-token-coding').value || '').trim()
+  const researchToken = String(document.getElementById('quick-token-research').value || '').trim()
+  if (!codingToken && !researchToken) {
+    return setQuickStatus('error', 'Enter at least one gateway token first.')
+  }
+  const tokenByPort = { 18789: codingToken, 19001: researchToken }
   await chrome.storage.local.set({
-    gatewayToken: token,
+    gatewayToken: codingToken || researchToken,
+    gatewayTokenByPort: tokenByPort,
     relayPort: 18789,
     chatBrowserBasePorts: DEFAULT_CHAT_BASE_PORTS,
-    autoOpenChatBrowsers: true,
   })
-  const coding = await checkRelayReachableSilent(18789, token)
-  const research = await checkRelayReachableSilent(19001, token)
+  const coding = await checkRelayReachableSilent(18789, codingToken || researchToken)
+  const research = await checkRelayReachableSilent(19001, researchToken || codingToken)
   if (coding.ok && research.ok) {
     setQuickStatus('ok', 'Connected to coding + research gateways.')
   } else if (coding.ok) {
@@ -321,7 +343,10 @@ async function quickConnect() {
 }
 
 async function openChatWindow(port) {
-  const token = String(document.getElementById('quick-token').value || '').trim()
+  const token =
+    port === 18789
+      ? String(document.getElementById('quick-token-coding').value || '').trim()
+      : String(document.getElementById('quick-token-research').value || '').trim()
   if (!token) return setQuickStatus('error', 'Enter a gateway token first.')
   const url = `http://127.0.0.1:${port}/__openclaw__/canvas/`
   await chrome.runtime.sendMessage({ type: 'openChatWindow', port, token, url })
@@ -329,42 +354,34 @@ async function openChatWindow(port) {
 }
 
 async function quickFix() {
-  const token = String(document.getElementById('quick-token').value || '').trim()
-  if (!token) return setQuickStatus('error', 'Enter a gateway token first.')
-  await chrome.runtime.sendMessage({ type: 'fixChatConnections', token })
+  const codingToken = String(document.getElementById('quick-token-coding').value || '').trim()
+  const researchToken = String(document.getElementById('quick-token-research').value || '').trim()
+  if (!codingToken && !researchToken) {
+    return setQuickStatus('error', 'Enter a gateway token first.')
+  }
+  await chrome.runtime.sendMessage({ type: 'fixChatConnections', tokenByPort: { 18789: codingToken, 19001: researchToken } })
   setQuickStatus('ok', 'Repair triggered. Reopen chat windows if needed.')
   await loadDebugLog()
 }
 
-async function saveChatSettings() {
-  const autoOpen = Boolean(document.getElementById('auto-open').checked)
-  const basePortsRaw = String(document.getElementById('chat-base-ports').value || '')
-  const basePorts = basePortsRaw
-    .split('\n')
-    .map((line) => Number.parseInt(line.trim(), 10))
-    .filter((n) => Number.isFinite(n) && n > 0 && n < 65536)
-  const raw = String(document.getElementById('chat-urls').value || '')
-  const urls = raw
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-  await chrome.storage.local.set({
-    autoOpenChatBrowsers: autoOpen,
-    chatBrowserUrls: urls,
-    chatBrowserBasePorts: basePorts.length ? basePorts : DEFAULT_CHAT_BASE_PORTS,
-  })
-  setChatStatus('ok', 'Chat browser settings saved.')
-}
 
 async function loadTokenFromNative() {
   setQuickStatus('ok', 'Requesting token from OpenClaw…')
   const res = await chrome.runtime.sendMessage({ type: 'loadTokenFromNative' })
   if (!res?.ok) {
     setQuickStatus('error', res?.error || 'Unable to load token from OpenClaw.')
+    await loadDebugLog()
     return
   }
-  document.getElementById('quick-token').value = res.token
-  await chrome.storage.local.set({ gatewayToken: res.token })
+  const token = res.token || ''
+  const coding = token
+  const research = token
+  document.getElementById('quick-token-coding').value = coding
+  document.getElementById('quick-token-research').value = research
+  await chrome.storage.local.set({
+    gatewayToken: coding || research,
+    gatewayTokenByPort: { 18789: coding, 19001: research },
+  })
   setQuickStatus('ok', 'Token loaded from OpenClaw.')
   await load()
 }
@@ -379,11 +396,19 @@ document.getElementById('open-both').addEventListener('click', async () => {
   await openChatWindow(19001)
 })
 document.getElementById('quick-fix').addEventListener('click', () => void quickFix())
-document.getElementById('save-chat').addEventListener('click', () => void saveChatSettings())
+// Auto-open settings removed.
 document.getElementById('refresh-log').addEventListener('click', () => void loadDebugLog())
 document.getElementById('clear-log').addEventListener('click', async () => {
   await chrome.runtime.sendMessage({ type: 'clearDebugLog' })
   await loadDebugLog()
+})
+document.getElementById('test-log').addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ type: 'logDebug', message: 'Test log from options page' })
+  await loadDebugLog()
+})
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return
+  if (changes.debugLog) void loadDebugLog()
 })
 document.getElementById('assign-tab').addEventListener('click', async () => {
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true })

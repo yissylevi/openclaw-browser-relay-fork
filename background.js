@@ -100,10 +100,7 @@ const CDP_METHOD_ALLOWLIST = new Set([
   'Network.getUserAgentOverride',
   'Network.setBypassServiceWorker',
   'Network.clearBrowserCache',
-  'Network.setCookie',
-  'Network.getCookies',
   'Network.setCookies',
-  'Network.clearBrowserCookies',
   'Target.getTargetInfo',
   'Target.getTargets',
   'Target.attachToTarget',
@@ -146,11 +143,13 @@ const CDP_EVENT_ALLOWLIST = new Set([
   'Page.loadEventFired',
   'Runtime.exceptionThrown',
   'Runtime.consoleAPICalled',
+  'Target.attachedToTarget',
+  'Target.detachedFromTarget',
 ])
 
 const EVENT_RATE_LIMIT_PER_SEC = 20
-let eventWindowStart = Date.now()
-let eventCountInWindow = 0
+/** @type {Map<string, {windowStart: number, count: number}>} */
+const eventRateByRelay = new Map()
 
 async function logDebug(message) {
   const now = new Date().toISOString()
@@ -177,14 +176,6 @@ try {
   // ignore
 }
 
-function nowStack() {
-  try {
-    return new Error().stack || ''
-  } catch {
-    return ''
-  }
-}
-
 async function getRelayPort() {
   const stored = await chrome.storage.local.get(['relayPort'])
   const raw = stored.relayPort
@@ -203,13 +194,15 @@ async function getRelaySettingsForTab(tabId) {
   const stored = await chrome.storage.local.get([
     'relayPort',
     'gatewayToken',
+    'gatewayTokenByPort',
     'relayPortByTabId',
     'gatewayTokenByTabId',
   ])
   const portByTab = stored.relayPortByTabId || {}
   const tokenByTab = stored.gatewayTokenByTabId || {}
+  const tokenByPort = stored.gatewayTokenByPort || {}
   const port = clampPort(portByTab[tabId] ?? stored.relayPort)
-  const token = String((tokenByTab[tabId] ?? stored.gatewayToken) || '').trim()
+  const token = String((tokenByTab[tabId] ?? tokenByPort[port] ?? stored.gatewayToken) || '').trim()
   return { port, token }
 }
 
@@ -230,6 +223,11 @@ function parsePortFromUrl(url) {
 function isRestrictedUrl(url) {
   if (!url) return true
   return URL_BLOCKLIST_PREFIXES.some((prefix) => url.startsWith(prefix))
+}
+
+function isCanvasUrl(url) {
+  if (!url) return false
+  return url.includes('/__openclaw__/canvas/')
 }
 
 async function setTabRelayOverride(tabId, port) {
@@ -281,6 +279,17 @@ async function waitForTabComplete(tabId, timeoutMs = 8000) {
   })
 }
 
+async function waitForTabCompleteStrict(tabId, timeoutMs = 10000) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null)
+  if (tab?.status === 'complete') return true
+  try {
+    await waitForTabComplete(tabId, timeoutMs)
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function isDebuggerAttached(tabId) {
   const targets = await chrome.debugger.getTargets().catch(() => [])
   for (const t of targets || []) {
@@ -307,6 +316,7 @@ async function attachWithRetry(tabId, relayKey, attempts = 3) {
           const tabState = tabs.get(tabId)
           const port = tabState?.relayKey ? Number(String(tabState.relayKey).split('::')[0]) : undefined
           if (port) await ensureStatusOverlay(tabId, port, 'attached')
+          if (port) setPortBadge(tabId, port)
           await logDebug(`attachWithRetry already-attached tab=${tabId}`)
           return
         }
@@ -327,7 +337,9 @@ async function attachWithRetry(tabId, relayKey, attempts = 3) {
         const tabState = tabs.get(tabId)
         const port = tabState?.relayKey ? Number(String(tabState.relayKey).split('::')[0]) : undefined
         if (port) await ensureStatusOverlay(tabId, port, 'attached')
+        if (port) setPortBadge(tabId, port)
         await logDebug(`attachWithRetry success tab=${tabId}`)
+        await chrome.storage.local.set({ lastAttachedTab: { tabId, port, at: new Date().toISOString() } })
         return
       }
       throw new Error('Attach did not complete (debugger still unattached)')
@@ -358,6 +370,9 @@ async function safeAttachActiveTab(port, token) {
   const url = tab?.url || ''
   if (isRestrictedUrl(url)) {
     throw new Error(`Cannot attach to restricted URL: ${url || 'unknown'}`)
+  }
+  if (isCanvasUrl(url)) {
+    throw new Error('Do not attach to the Canvas tab. Attach to a normal web page instead.')
   }
 
   if (await isDebuggerAttachedByOther(tabId)) {
@@ -422,9 +437,14 @@ async function ensureChatBrowsersOpen() {
 
 function setBadge(tabId, kind) {
   const cfg = BADGE[kind]
-  void chrome.action.setBadgeText({ tabId, text: cfg.text })
-  void chrome.action.setBadgeBackgroundColor({ tabId, color: cfg.color })
-  void chrome.action.setBadgeTextColor({ tabId, color: '#FFFFFF' }).catch(() => {})
+  chrome.action.setBadgeText({ tabId, text: cfg.text }).catch(() => {})
+  chrome.action.setBadgeBackgroundColor({ tabId, color: cfg.color }).catch(() => {})
+  chrome.action.setBadgeTextColor({ tabId, color: '#FFFFFF' }).catch(() => {})
+}
+
+function clearBadge(tabId) {
+  chrome.action.setBadgeText({ tabId, text: '' }).catch(() => {})
+  chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE.off.color }).catch(() => {})
 }
 
 async function ensureStatusOverlay(tabId, port, statusText) {
@@ -494,9 +514,9 @@ async function cleanupInvalidTabAssignments() {
 function setPortBadge(tabId, port) {
   if (!port) return
   const text = String(port).slice(-4)
-  void chrome.action.setBadgeText({ tabId, text })
-  void chrome.action.setBadgeBackgroundColor({ tabId, color: '#0EA5E9' })
-  void chrome.action.setBadgeTextColor({ tabId, color: '#FFFFFF' }).catch(() => {})
+  chrome.action.setBadgeText({ tabId, text }).catch(() => {})
+  chrome.action.setBadgeBackgroundColor({ tabId, color: '#0EA5E9' }).catch(() => {})
+  chrome.action.setBadgeTextColor({ tabId, color: '#FFFFFF' }).catch(() => {})
 }
 
 async function ensureRelayConnection(port, gatewayToken) {
@@ -509,9 +529,7 @@ async function ensureRelayConnection(port, gatewayToken) {
 
   const connectPromise = (async () => {
     const httpBase = `http://127.0.0.1:${port}`
-    const wsUrl = gatewayToken
-      ? `ws://127.0.0.1:${port}/extension?token=${encodeURIComponent(gatewayToken)}`
-      : `ws://127.0.0.1:${port}/extension`
+    const wsUrl = `ws://127.0.0.1:${port}/extension`
 
     // Fast preflight: is the relay server up?
     try {
@@ -551,6 +569,10 @@ async function ensureRelayConnection(port, gatewayToken) {
           }
         })
 
+        // Authenticate via first message instead of URL query param
+        if (gatewayToken) {
+          ws.send(JSON.stringify({ method: 'auth', params: { token: gatewayToken } }))
+        }
         relaySockets.set(key, ws)
         break
       } catch (err) {
@@ -680,7 +702,11 @@ async function onRelayMessage(relayKey, text) {
       const result = await handleForwardCdpCommand(relayKey, msg)
       sendToRelay(relayKey, { id: msg.id, result })
     } catch (err) {
-      sendToRelay(relayKey, { id: msg.id, error: err instanceof Error ? err.message : String(err) })
+      try {
+        sendToRelay(relayKey, { id: msg.id, error: err instanceof Error ? err.message : String(err) })
+      } catch {
+        // Relay disconnected during error response; nothing more to do
+      }
     }
   }
 }
@@ -707,49 +733,49 @@ async function attachTab(tabId, opts = {}) {
   attachingTabs.add(tabId)
   tabs.set(tabId, { state: 'connecting', relayKey: opts.relayKey })
   try {
-  const tab = await chrome.tabs.get(tabId).catch(() => null)
-  const url = tab?.url || ''
-  if (URL_BLOCKLIST_PREFIXES.some((prefix) => url.startsWith(prefix))) {
-    throw new Error(`Cannot attach to restricted URL: ${url}`)
-  }
+    const tab = await chrome.tabs.get(tabId).catch(() => null)
+    const url = tab?.url || ''
+    if (URL_BLOCKLIST_PREFIXES.some((prefix) => url.startsWith(prefix))) {
+      throw new Error(`Cannot attach to restricted URL: ${url}`)
+    }
 
-  const debuggee = { tabId }
-  await chrome.debugger.attach(debuggee, '1.3')
-  await chrome.debugger.sendCommand(debuggee, 'Page.enable').catch(() => {})
+    const debuggee = { tabId }
+    await chrome.debugger.attach(debuggee, '1.3')
+    await chrome.debugger.sendCommand(debuggee, 'Page.enable').catch(() => {})
 
-  const info = /** @type {any} */ (await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo'))
-  const targetInfo = info?.targetInfo
-  const targetId = String(targetInfo?.targetId || '').trim()
-  if (!targetId) {
-    throw new Error('Target.getTargetInfo returned no targetId')
-  }
+    const info = /** @type {any} */ (await chrome.debugger.sendCommand(debuggee, 'Target.getTargetInfo'))
+    const targetInfo = info?.targetInfo
+    const targetId = String(targetInfo?.targetId || '').trim()
+    if (!targetId) {
+      throw new Error('Target.getTargetInfo returned no targetId')
+    }
 
-  const sessionId = `cb-tab-${nextSession++}`
-  const attachOrder = nextSession
+    const attachOrder = nextSession
+    const sessionId = `cb-tab-${nextSession++}`
 
-  tabs.set(tabId, { state: 'connected', sessionId, targetId, attachOrder, relayKey: opts.relayKey })
-  tabBySession.set(sessionId, tabId)
-  void chrome.action.setTitle({
-    tabId,
-    title: 'OpenClaw Browser Relay: attached (click to detach)',
-  })
-
-  if (!opts.skipAttachedEvent) {
-    sendToRelay(opts.relayKey, {
-      method: 'forwardCDPEvent',
-      params: {
-        method: 'Target.attachedToTarget',
-        params: {
-          sessionId,
-          targetInfo: { ...targetInfo, attached: true },
-          waitingForDebugger: false,
-        },
-      },
+    tabs.set(tabId, { state: 'connected', sessionId, targetId, attachOrder, relayKey: opts.relayKey })
+    tabBySession.set(sessionId, tabId)
+    void chrome.action.setTitle({
+      tabId,
+      title: 'OpenClaw Browser Relay: attached (click to detach)',
     })
-  }
 
-  setBadge(tabId, 'on')
-  return { sessionId, targetId }
+    if (!opts.skipAttachedEvent) {
+      sendToRelay(opts.relayKey, {
+        method: 'forwardCDPEvent',
+        params: {
+          method: 'Target.attachedToTarget',
+          params: {
+            sessionId,
+            targetInfo: { ...targetInfo, attached: true },
+            waitingForDebugger: false,
+          },
+        },
+      })
+    }
+
+    setBadge(tabId, 'on')
+    return { sessionId, targetId }
   } finally {
     attachingTabs.delete(tabId)
   }
@@ -790,43 +816,6 @@ async function detachTab(tabId, reason) {
     tabId,
     title: 'OpenClaw Browser Relay (click to attach/detach)',
   })
-}
-
-async function connectOrToggleForActiveTab() {
-  const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
-  const tabId = active?.id
-  if (!tabId) return
-
-  const existing = tabs.get(tabId)
-  if (existing?.state === 'connected') {
-    await detachTab(tabId, 'toggle')
-    return
-  }
-
-  tabs.set(tabId, { state: 'connecting' })
-  setBadge(tabId, 'connecting')
-  void chrome.action.setTitle({
-    tabId,
-    title: 'OpenClaw Browser Relay: connecting to local relay…',
-  })
-
-  try {
-    const { port, token } = await getRelaySettingsForTab(tabId)
-    await ensureRelayConnection(port, token)
-    await attachWithRetry(tabId, relayKeyFor(port, token))
-    setPortBadge(tabId, port)
-  } catch (err) {
-    tabs.delete(tabId)
-    setBadge(tabId, 'error')
-    void chrome.action.setTitle({
-      tabId,
-      title: 'OpenClaw Browser Relay: relay not running (open options for setup)',
-    })
-    void maybeOpenHelpOnce()
-    // Extra breadcrumbs in chrome://extensions service worker logs.
-    const message = err instanceof Error ? err.message : String(err)
-    console.warn('attach failed', message, nowStack())
-  }
 }
 
 async function handleForwardCdpCommand(relayKey, msg) {
@@ -921,14 +910,30 @@ function onDebuggerEvent(source, method, params) {
   const tab = tabs.get(tabId)
   if (!tab?.sessionId) return
 
-  if (!CDP_EVENT_ALLOWLIST.has(method)) return
-  const now = Date.now()
-  if (now - eventWindowStart >= 1000) {
-    eventWindowStart = now
-    eventCountInWindow = 0
+  // Track child sessions before the allowlist filter
+  if (method === 'Target.attachedToTarget' && params?.sessionId) {
+    childSessionToTab.set(String(params.sessionId), tabId)
   }
-  eventCountInWindow += 1
-  if (eventCountInWindow > EVENT_RATE_LIMIT_PER_SEC) return
+  if (method === 'Target.detachedFromTarget' && params?.sessionId) {
+    childSessionToTab.delete(String(params.sessionId))
+  }
+
+  if (!CDP_EVENT_ALLOWLIST.has(method)) return
+
+  // Per-relay rate limiting
+  const relayKey = tab.relayKey || ''
+  let rate = eventRateByRelay.get(relayKey)
+  if (!rate) {
+    rate = { windowStart: Date.now(), count: 0 }
+    eventRateByRelay.set(relayKey, rate)
+  }
+  const now = Date.now()
+  if (now - rate.windowStart >= 1000) {
+    rate.windowStart = now
+    rate.count = 0
+  }
+  rate.count += 1
+  if (rate.count > EVENT_RATE_LIMIT_PER_SEC) return
 
   if (method === 'Target.attachedToTarget' && params?.sessionId) {
     childSessionToTab.set(String(params.sessionId), tabId)
@@ -984,39 +989,85 @@ chrome.runtime.onInstalled.addListener(() => {
   void chrome.storage.local.set({ forkFeatures: FORK_FEATURES })
   void chrome.runtime.openOptionsPage()
   void cleanupInvalidTabAssignments()
-  void ensureChatBrowsersOpen()
+  void logDebug('background installed')
 })
 
 chrome.runtime.onStartup.addListener(() => {
   void chrome.storage.local.set({ forkFeatures: FORK_FEATURES })
   void cleanupInvalidTabAssignments()
-  void ensureChatBrowsersOpen()
+  void logDebug('background startup')
 })
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg !== 'object') return
   if (msg.type === 'loadTokenFromNative') {
     ;(async () => {
-      const port = chrome.runtime.connectNative('ai.openclaw.token')
-      port.onMessage.addListener((m) => {
-        if (m && m.token) sendResponse({ ok: true, token: m.token })
-        else sendResponse({ ok: false, error: m?.error || 'No token returned' })
-      })
-      port.onDisconnect.addListener(() => {
-        if (chrome.runtime.lastError) {
-          sendResponse({ ok: false, error: chrome.runtime.lastError.message })
+      let responded = false
+      let timeoutId = null
+      try {
+        await logDebug('loadTokenFromNative start')
+        const port = chrome.runtime.connectNative('ai.openclaw.token')
+        port.postMessage({ request: 'token' })
+        timeoutId = setTimeout(() => {
+          if (responded) return
+          responded = true
+          sendResponse({ ok: false, error: 'Native token bridge timed out' })
+        }, 2500)
+        port.onMessage.addListener((m) => {
+          if (responded) return
+          responded = true
+          if (timeoutId) clearTimeout(timeoutId)
+          void logDebug(`loadTokenFromNative message received: ${m && (m.token || m.codingToken) ? 'token' : 'no token'}`)
+          if (m && m.token) sendResponse({ ok: true, token: m.token })
+          else sendResponse({ ok: false, error: m?.error || 'No token returned' })
+        })
+        port.onDisconnect.addListener(() => {
+          if (responded) return
+          responded = true
+          if (timeoutId) clearTimeout(timeoutId)
+          const errMsg = chrome.runtime.lastError?.message || 'Native token bridge disconnected'
+          void logDebug(`loadTokenFromNative disconnect: ${errMsg}`)
+          sendResponse({ ok: false, error: errMsg })
+        })
+      } catch (err) {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (!responded) {
+          responded = true
+          void logDebug(`loadTokenFromNative error: ${err instanceof Error ? err.message : String(err)}`)
+          sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) })
         }
-      })
+      }
     })()
     return true
   }
   if (msg.type === 'attachActiveTab') {
     ;(async () => {
       const port = clampPort(msg.port)
-      const stored = await chrome.storage.local.get(['gatewayToken'])
-      const token = String(stored.gatewayToken || '').trim()
+      const stored = await chrome.storage.local.get(['gatewayToken', 'gatewayTokenByPort'])
+      const token = String((stored.gatewayTokenByPort || {})[port] || stored.gatewayToken || '').trim()
       if (!token) throw new Error('Missing gateway token')
       const { tabId } = await safeAttachActiveTab(port, token)
+      sendResponse({ ok: true, tabId })
+    })().catch((err) => {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) })
+    })
+    return true
+  }
+  if (msg.type === 'openControlledTab') {
+    ;(async () => {
+      const port = clampPort(msg.port)
+      const stored = await chrome.storage.local.get(['gatewayToken', 'gatewayTokenByPort'])
+      const token = String((stored.gatewayTokenByPort || {})[port] || stored.gatewayToken || '').trim()
+      if (!token) throw new Error('Missing gateway token')
+      const url = 'https://example.com'
+      const created = await chrome.tabs.create({ url, active: true })
+      const tabId = created?.id
+      if (!tabId) throw new Error('Failed to open controlled tab')
+      await setTabRelayOverrideWithToken(tabId, port, token)
+      await ensureRelayConnection(port, token)
+      const ready = await waitForTabCompleteStrict(tabId, 12000)
+      if (!ready) throw new Error('Controlled tab did not finish loading')
+      await attachWithRetry(tabId, relayKeyFor(port, token))
       sendResponse({ ok: true, tabId })
     })().catch((err) => {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) })
@@ -1047,6 +1098,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         await logDebug(`openChatWindow created tab=${tabId} port=${port}`)
         await setTabRelayOverrideWithToken(tabId, port, token)
         await ensureRelayConnection(port, token)
+        const ready = await waitForTabCompleteStrict(tabId, 12000)
+        if (!ready) {
+          await chrome.storage.local.set({
+            lastAttachError: { tabId, message: 'Page did not finish loading. Attach skipped.', at: new Date().toISOString() },
+          })
+          await logDebug(`openChatWindow attach skipped; tab not ready tab=${tabId}`)
+          sendResponse({ ok: false, error: 'Page did not finish loading. Attach skipped.' })
+          return
+        }
         await attachWithRetry(tabId, relayKeyFor(port, token))
       }
       sendResponse({ ok: true, tabId })
@@ -1059,6 +1119,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'fixChatConnections') {
     ;(async () => {
       await logDebug('fixChatConnections message received')
+      const tokenByPort = msg.tokenByPort || {}
+      if (tokenByPort && (tokenByPort[18789] || tokenByPort[19001])) {
+        await chrome.storage.local.set({ gatewayTokenByPort: tokenByPort })
+      }
       await ensureChatBrowsersOpen()
       sendResponse({ ok: true })
     })().catch((err) => {
@@ -1075,5 +1139,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) })
     })
     return true
+  }
+  if (msg.type === 'logDebug') {
+    ;(async () => {
+      await logDebug(msg.message || 'Debug log test')
+      sendResponse({ ok: true })
+    })().catch((err) => {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) })
+    })
+    return true
+  }
+})
+
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  const tabState = tabs.get(tabId)
+  if (tabState?.state === 'connected') return
+  // Only clear badge if we never attached this tab.
+  const stored = await chrome.storage.local.get(['lastAttachedTab'])
+  if (stored.lastAttachedTab?.tabId !== tabId) {
+    clearBadge(tabId)
   }
 })
