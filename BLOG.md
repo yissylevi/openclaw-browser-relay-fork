@@ -1,134 +1,195 @@
-# A Human‑Centered Fork of the OpenClaw Browser Relay Extension
+# A Human‑Centered Rebuild of the OpenClaw Browser Relay Extension
 
-If you’ve ever used the OpenClaw Browser Relay extension with multiple agents, you’ve probably felt the friction: tab IDs, per‑tab overrides, manual attach steps, and that dreaded red “!” badge. This fork exists to make the relay **feel obvious** and **work the way humans expect**.
-
-This post walks through what changed, why it matters, and how to install it.
+This post explains **why** this fork exists, **what problems it solves**, and **how we fixed them**—including the Chrome crash issue. It also documents the exact feature changes, who should use it, and when you should stick with the original.
 
 ---
 
-## The Problem
+## The Problem We Were Solving
 
-The original extension is powerful, but the workflow is not obvious for non‑technical users:
+OpenClaw’s browser relay is powerful, but the original Chrome extension was built for a developer‑first workflow. In practice, that meant:
 
-- You need to know ports and tokens.
-- You have to remember which tab is attached to which relay.
-- Attaching a tab too early can crash Chrome.
-- Troubleshooting requires digging into service‑worker logs.
+- You had to remember **ports** and **tokens**.
+- You had to manually assign **tab IDs** to relays.
+- The UI didn’t clearly tell you **what was connected to what**.
+- Debugging was done through **service‑worker logs**, not the UI.
+- Chrome would occasionally **crash** when attaching, especially on fast‑loading pages.
 
-That makes the tool feel brittle, even when it’s working correctly.
-
----
-
-## The Goal
-
-Make the extension usable **without a manual checklist**:
-
-- Connect once
-- Pick Coding vs Research
-- See immediately which relay a page is using
-- Recover instantly if something breaks
+For a system that is supposed to feel agentic and seamless, the experience was too fragile.
 
 ---
 
-## What’s New
+## Why We Needed to Fix It
 
-### 1) Popup Attach Chooser
-Click the extension icon and choose:
+The browser relay is often the first “hands‑on” touchpoint in the OpenClaw workflow. If the relay feels brittle or confusing, users conclude that the system is unreliable—even if the backend is fine.
 
-- **Attach to Coding (18789)**
-- **Attach to Research (19001)**
+In short:
 
-No per‑tab overrides, no options‑page detours. The popup is now the primary control surface.
-
----
-
-### 2) Quick Setup Wizard
-The options page now starts with a Quick Setup block:
-
-- **Load token** (automatic)
-- **Connect** (tests both relays)
-- **Open both** (chat windows open automatically)
-- **Fix connections** (re‑opens and re‑attaches)
-
-It’s built for a one‑time setup flow, not a “read the docs” flow.
+- **Reliability** creates trust.
+- **Clarity** reduces support tickets.
+- **Speed to attach** determines whether people actually use the agent in real workflows.
 
 ---
 
-### 3) Auto‑Open Chat Browsers
-On Chrome startup, the extension opens:
+## What Was Breaking (Including Chrome Crashes)
 
-- `http://127.0.0.1:18789/__openclaw__/canvas/`
-- `http://127.0.0.1:19001/__openclaw__/canvas/`
+### 1) Attachment Race Conditions
+The extension would attach **too early**—before the tab finished loading—causing intermittent attach failures or Chrome instability.
 
-Each in its own window. No more hunting for the right chat tab.
+### 2) Event Flooding
+The extension forwarded **all CDP events**, which can be thousands of events per second on real websites. This can overwhelm Chrome’s debugger and **crash the browser**.
 
----
+### 3) Unsafe Attach Targets
+Attaching to restricted URLs (`chrome://`, `chrome-extension://`) or tabs already attached by DevTools could crash Chrome or hard‑fail without clear errors.
 
-### 4) Port Overlay on Every Page
-When a tab is attached, a small overlay appears:
+### 4) UX Confusion
+The options page required **manual per‑tab overrides**, and the badge was the only indicator. Users couldn’t easily tell:
 
-> **OpenClaw attached · port 18789**
+- Which port a page was using
+- Whether attach was active or stuck
+- Whether the token was accepted
 
-Now you can see immediately which relay the tab belongs to.
-
----
-
-### 5) Built‑in Debug Log
-Instead of “open service worker logs and hunt,” the options page shows the last 200 debug lines. If something breaks, you can copy/paste the log instantly.
-
----
-
-### 6) Stability Fixes
-To prevent Chrome crashes:
-
-- CDP events are **allow‑listed** and **rate‑limited**.
-- Attach waits for tab load completion.
-- Attach retries are safe and bounded.
+### 5) Debugging Was Invisible
+When things failed, there was no in‑UI trail. You had to open Chrome service‑worker logs and guess what happened.
 
 ---
 
-## Installation
+## What We Did (Step‑by‑Step)
 
-1. Download or clone the repo.
-2. Open `chrome://extensions`.
-3. Enable **Developer mode**.
-4. Click **Load unpacked**.
-5. Select the extension folder.
+### Step 1 — Make Attach Safe
+We added:
 
----
+- A **wait‑for‑tab‑complete** check before attaching.
+- A **retry loop** with backoff.
+- A **guard against double‑attach** attempts.
+- A **restricted‑URL guard** so we never attach to `chrome-extension://` or other blocked schemes.
+- A **DevTools/other debugger guard** (if another debugger is attached, we block and show a clear error).
 
-## Usage (Fast Path)
+This eliminated timing‑related crashes and silent failures.
 
-1. Open Options.
-2. Click **Load token**.
-3. Click **Connect**.
-4. Click **Open both**.
-5. Use the popup to attach any tab.
+### Step 2 — Stop Event Flooding
+We replaced “forward everything” with a strict **allow‑list** and rate limiting:
 
----
+**Now we only forward:**
+- `Page.frameNavigated`
+- `Page.loadEventFired`
+- `Runtime.exceptionThrown`
+- `Runtime.consoleAPICalled`
 
-## Why This Matters
+Everything else is dropped, and events are capped at **20/sec**.
 
-A tool like OpenClaw is only as powerful as its **everyday usability**. This fork focuses on the most human‑centered question:
+This preserves control without crashing Chrome.
 
-> “What would make this feel obvious for someone who isn’t thinking about ports, tokens, and relays?”
+### Step 3 — Make Relay Choice Obvious
+We added a **popup** (the extension icon) with two buttons:
 
-That’s the bar. This fork moves closer to it.
+- Attach to **Coding** (18789)
+- Attach to **Research** (19001)
 
----
+No more tab ID juggling.
 
-## Repo & Download
+### Step 4 — Build a Human‑Centered Setup Flow
+A new **Quick Setup** section now lets you:
 
-Clone the repo and load it as an unpacked extension:
+- Load the token
+- Connect to both relays
+- Open both chat windows
+- Fix connections if stuck
+
+### Step 5 — Add Visibility
+We injected a **small overlay** into attached pages:
 
 ```
+OpenClaw attached · port 18789
+```
+
+This makes it obvious which relay a page is connected to.
+
+### Step 6 — Add Diagnostics
+We added an in‑app **Debug Log** panel showing the last 200 events so you can troubleshoot without DevTools.
+
+---
+
+## Code Changes (Summary)
+
+Key changes include:
+
+- `background.js`
+  - Safe attach sequence (wait + retry + guard)
+  - Restricted URL + “already attached” guards
+  - CDP event allow‑list + rate limit
+  - Overlay injection
+  - Debug logging
+
+- `popup.html` / `popup.js`
+  - New popup UI to select relay
+
+- `options.html` / `options.js`
+  - Quick Setup UI
+  - Token loader
+  - Debug log
+  - Clear explanations
+
+- `manifest.json`
+  - Stable key for consistent extension ID
+  - Popup registration
+  - `scripting` permission
+
+---
+
+## Final Feature Set (End State)
+
+✅ **Popup relay chooser** (Coding/Research)
+✅ **Quick setup wizard**
+✅ **Auto‑open chat browsers**
+✅ **Per‑page port overlay**
+✅ **Safe attach with retries**
+✅ **Restricted URL + DevTools guards**
+✅ **Crash‑reducing event throttling**
+✅ **Debug log built into UI**
+✅ **Token auto‑loader** (via native host)
+
+---
+
+## Why This Is Better Than the Original
+
+| Issue | Original | Fork |
+|------|---------|------|
+| Attach reliability | Unstable | Safe attach + retries |
+| Chrome crashes | Frequent | Throttled + allow‑listed + guards |
+| Relay selection | Manual tab overrides | One‑click popup |
+| Visibility | Badge only | Badge + per‑page overlay |
+| Debugging | Service worker logs | Built‑in debug log |
+| Setup | Multi‑step manual | Guided Quick Setup |
+
+---
+
+## When You Should Use This Fork
+
+**Use it if:**
+- You run **multiple OpenClaw agents** (coding + research).
+- You want a **clear UX** for non‑technical users.
+- You need **stability** in Chrome (no crashes).
+- You want to see **which port a page is attached to**.
+
+---
+
+## When You Should NOT Use This Fork
+
+**Avoid it if:**
+- You are testing experimental CDP events that require full event streams.
+- You need raw CDP traffic for debugging low‑level DOM/CSS activity.
+- You run a custom gateway stack that doesn’t match the default ports.
+
+In those cases, the original extension may be more appropriate.
+
+---
+
+## Repo
+
 https://github.com/yissylevi/openclaw-browser-relay-fork
-```
-
-(Replace with your GitHub username.)
 
 ---
 
-If you want to use this in a team, or integrate automatic token loading through a native host, it’s already supported.
+## Final Note
 
-If you want improvements or contributions, open an issue in the repo.
+The goal of this fork is not to change OpenClaw’s capabilities—only to make them **reliable, predictable, and human‑centered**. If you want tools that “just work,” this is that version.

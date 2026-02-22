@@ -227,6 +227,11 @@ function parsePortFromUrl(url) {
   return null
 }
 
+function isRestrictedUrl(url) {
+  if (!url) return true
+  return URL_BLOCKLIST_PREFIXES.some((prefix) => url.startsWith(prefix))
+}
+
 async function setTabRelayOverride(tabId, port) {
   const stored = await chrome.storage.local.get(['relayPortByTabId', 'gatewayToken'])
   const portByTab = stored.relayPortByTabId || {}
@@ -284,6 +289,12 @@ async function isDebuggerAttached(tabId) {
   return false
 }
 
+async function isDebuggerAttachedByOther(tabId) {
+  const attached = await isDebuggerAttached(tabId)
+  if (!attached) return false
+  return !tabs.has(tabId)
+}
+
 async function attachWithRetry(tabId, relayKey, attempts = 3) {
   const delays = [1200, 2400, 3600]
   for (let i = 0; i < attempts; i += 1) {
@@ -336,6 +347,27 @@ async function attachWithRetry(tabId, relayKey, attempts = 3) {
       }
     }
   }
+}
+
+async function safeAttachActiveTab(port, token) {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
+  const tabId = active?.id
+  if (!tabId) throw new Error('No active tab found')
+
+  const tab = await chrome.tabs.get(tabId).catch(() => null)
+  const url = tab?.url || ''
+  if (isRestrictedUrl(url)) {
+    throw new Error(`Cannot attach to restricted URL: ${url || 'unknown'}`)
+  }
+
+  if (await isDebuggerAttachedByOther(tabId)) {
+    throw new Error('Debugger already attached by another tool (close DevTools and try again).')
+  }
+
+  await setTabRelayOverrideWithToken(tabId, port, token)
+  await ensureRelayConnection(port, token)
+  await attachWithRetry(tabId, relayKeyFor(port, token))
+  return { tabId }
 }
 
 async function ensureChatBrowsersOpen() {
@@ -980,17 +1012,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.type === 'attachActiveTab') {
     ;(async () => {
-      const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
-      const tabId = active?.id
-      if (!tabId) throw new Error('No active tab found')
       const port = clampPort(msg.port)
       const stored = await chrome.storage.local.get(['gatewayToken'])
       const token = String(stored.gatewayToken || '').trim()
       if (!token) throw new Error('Missing gateway token')
-      await setTabRelayOverrideWithToken(tabId, port, token)
-      await ensureRelayConnection(port, token)
-      await attachWithRetry(tabId, relayKeyFor(port, token))
-      sendResponse({ ok: true })
+      const { tabId } = await safeAttachActiveTab(port, token)
+      sendResponse({ ok: true, tabId })
     })().catch((err) => {
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) })
     })
