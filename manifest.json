@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "OpenClaw Browser Relay",
+  "version": "0.1.0",
+  "description": "Attach OpenClaw to your existing Chrome tab via a local CDP relay server.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "debugger",
+    "tabs",
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "OpenClaw Browser Relay (click to attach/detach)",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "key": "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBdGo1eWdaWVdVWCt3SUpjSUFHK2VLY0taOTlqK2hja2N2bysrSkZaWDBMSDBJcnJkCkVKUmhNK3VaQld0MTlLV3hlWXEvazc2YU80R2dQc1FjRWxTZnJmL083Qm9vQmdpclIzR2NLZHZobTA1Z2JiTEkKZTJQQ056dXc0MHhPaVJsQkVDNHE4RzdqYjJvMHZwREsvNWNLR2l4TURjajU0b1VOWjRKZmx2V0JCQmZNZmMycApWZnFINVFkQXZvWTRKTzVIbUJIS3c0R3U2RmVYbytXT1RzdmRFdUhRUGxpOU13TmYyNm1OdytacEhicHBxVUw1Cm8zMTFwK3dUWlYzSXAyYkJpVTE1T0N2NDR3OWFvQXYybkRGTUZjMnB1UnNORFk3dUdIYU1ubWREOTdOWDRsSjMKN1liWHY0eEVhUVJYOW9qY2NRbG12ME5rc3M4NEE0NUQ2QklkdlFJREFRQUJBb0lCQUNQYVF6S2xNVHpWVHZRSwpZbU9ia2RVTFdMaitzb3ZsVmNkVGhnZW1DTjZnczdQRmFVb2l0c0M5SDd5R09JMXByM0dHejB1a21ya01ObGRDCnczY0R1T3BGUWhNR3prcnBsN0NWZERCejluMVVQUG8zeXVNamJBanJzRS8zS2hna3BMMG5LQUZtLzAxaTZuOTMKQXNpbmtUQTIrTHRaaDNkOXozWkdtc0diQ01laUJmYkhqMk1tR0Qydkd0eTBubWZhVVIvUlBDZVNvNTlidnk1VwpwYmxSTjBLQXhnbUtwUCs0YWtXLy9GQWRhS05US1MzQ1Z2RkVCN2ZaUTFVMTkwdmpHV1ZrVkV3bG5FdXVSUFBjCmwyOURrT2pKSHVtYW1ETWpBMzl4aHZudDNjN25NRGdFUzl1aktwV1ZpZzZtSGo4UUlMdC9JUzBnNEpLbndVeHcKcWlrd0NPMENnWUVBMlcvVVRnVEx6bXJsV2g1S0lsL0ZuL2NmWnBtZlU1TFBZWG5RK2dlRm4yYnU0Z1FqNXRzVQo5djVsWDFBbzNxbEVCMUxwSVJ1UldrNVVQOGtaRzA1bTdjTThtK3lNY0gwVWJxVUtUMDk2a3F0UWlMVHJMLzJkCnlGaTJ0SGYwaC9naVQyeXRHMEJ3VlBVS0pxS1Y3Y3hJWXEweXFmd1licUJsVDBvYVpGSGVPYXNDZ1lFQTFwREYKOG1lNm8rRGhCWGMwQlhxbFR6K0hDQ2ZzTG5YUFowNDl1QlE1K254R1VGNDJEcjhTMkZURjI2YlZzTGpqcVB4UQpsRUZCbXgvQThiamYzQWdLSlllbEYvckFxY280ZGtYcFRmT2tFNGkva245U2VkazNJRmJVeUtkVnV2aHJKVmgzCnQxYTNDa1dOUXpNTy9YaWRjYnNhNDRRQmN1VDFHVVNRQ1dmbExqY0NnWUVBa1hzaU9JVTYrOFJINmxFRDF4WHYKTzBWMExBaXpNbzZ5MUl4VngwU0xJZ2tUNGdOVkpod0ZYZkQrVUpSb2svbjZ1MCs5RGRyTkdQZjVwS2ZmZFlheQpsWGlncjg3SWRHY3I2WS9oWXdsUmdKckJDb2JLS1ZUdVllTUJjNlFpNTJxZFFqajdaWlZxMDEwVVNwOVQ0MFJnClZpMStEWC9QdFF6Nlc5Ky80c2xuLzNzQ2dZQm5LTUhTOHVZOEprRnAxRTd4bDI3bE5DRGkzZmJpdTRlVkhudjAKQmQxK1BjTzhuaDhWWmU1VWppVjJucmE4dVpmVFJrUWprMkJNaWE3RlNPSndNbmxXWStvUEptTDgveG00VzVKNQpCUHZNM0lGbW1NcDVoT0xKTEpZdlJxeWtNUTJxcmVjWkFac05XRFU3cXMrNU5BVldpZU82b1Z2azlvbVV0VzhlCjVwRzhid0tCZ1FDdDdKbTVjV0p0TFhGSFpTN29Ucm1aOUdmaFkwQUE4RzY0NUJUeC9zVnBpa3FCOTFBMXNJN1UKZ1UyRUZrdUc0YVpjLy83NmVXaEJqK2llSkh4MElxbEszeUdObWZzVEx2Z21BYnNhMndscnI4MHBic0dqbDNuZgo2Mm0zUEpmb3J1aDRuL08vMzZlSnRFM29PSlNJQVRSNUpQMlltQnpFZ1VHQ2VUb3JuKzg3N1E9PQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo="
+}
